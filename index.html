@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Nhật Ký Phim Của Tôi</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+    import { getFirestore, collection, addDoc, getDocs, orderBy, query, deleteDoc, doc } 
+      from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+
+    // Cấu hình Firebase của bạn
+    const firebaseConfig = {
+      apiKey: "AIzaSyBxngFNjp6mEN5I1h4CwZH1V9PeajHyM8E",
+      authDomain: "movie-tracker-2fbd4.firebaseapp.com",
+      projectId: "movie-tracker-2fbd4",
+      storageBucket: "movie-tracker-2fbd4.firebasestorage.app",
+      messagingSenderId: "524980531812",
+      appId: "1:524980531812:web:30502c1d86a21007f4e571",
+      measurementId: "G-NW38RJ7PGF"
+    };
+
+    // TMDB Bearer Token của bạn
+    const TMDB_ACCESS_TOKEN = "eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiJmOGY0MTE0Y2QwMDlhNGU5NWJmODkwNzM4MzFjZDNmZSIsIm5iZiI6MTc5MTQ2NzQ5My4wOTUsInN1YiI6IjZhYzc5ZmU1NmQ2MjA5NzI1MWJkOGY0YyIsInNjb3BlcyI6WyJhcGlfcmVhZCJdLCJ2ZXJzaW9uIjoxfQ.-s4IH80RmiS37qF3F6xO-GxY94s_lb6FgIgukFnn94c";
+
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+    const moviesCol = collection(db, "reviewed_movies");
+
+    let selectedMovie = null;
+
+    // Tìm kiếm phim qua TMDB API v4 Bearer Auth
+    window.searchMovies = async function() {
+      const queryText = document.getElementById("search-input").value.trim();
+      const resultsDiv = document.getElementById("search-results");
+      if (!queryText) return;
+
+      resultsDiv.innerHTML = `<p class="text-sm text-gray-400 p-2">Đang tìm kiếm...</p>`;
+      resultsDiv.classList.remove("hidden");
+
+      try {
+        const res = await fetch(`https://api.themoviedb.org/3/search/movie?query=${encodeURIComponent(queryText)}&language=vi-VN`, {
+          headers: {
+            Authorization: `Bearer ${TMDB_ACCESS_TOKEN}`,
+            accept: 'application/json'
+          }
+        });
+        const data = await res.json();
+        
+        if (!data.results || data.results.length === 0) {
+          resultsDiv.innerHTML = `<p class="text-sm text-gray-400 p-2">Không tìm thấy phim phù hợp.</p>`;
+          return;
+        }
+
+        resultsDiv.innerHTML = "";
+        data.results.slice(0, 5).forEach(movie => {
+          const poster = movie.poster_path 
+            ? `https://image.tmdb.org/t/p/w200${movie.poster_path}` 
+            : 'https://via.placeholder.com/200x300?text=No+Poster';
+          const year = movie.release_date ? movie.release_date.split("-")[0] : "N/A";
+
+          const item = document.createElement("div");
+          item.className = "flex items-center gap-3 p-2 hover:bg-slate-700 rounded-lg cursor-pointer transition";
+          item.innerHTML = `
+            <img src="${poster}" class="w-12 h-16 object-cover rounded shadow" />
+            <div class="text-left">
+              <p class="font-semibold text-white text-sm">${movie.title}</p>
+              <p class="text-xs text-gray-400">${year} • Điểm TMDB: ${movie.vote_average ? movie.vote_average.toFixed(1) : 0}/10</p>
+            </div>
+          `;
+          item.onclick = () => selectMovie(movie, poster, year);
+          resultsDiv.appendChild(item);
+        });
+      } catch (err) {
+        resultsDiv.innerHTML = `<p class="text-sm text-red-400 p-2">Lỗi gọi TMDB: ${err.message}</p>`;
+      }
+    };
+
+    function selectMovie(movie, poster, year) {
+      selectedMovie = {
+        title: movie.title,
+        poster_url: poster,
+        year: year,
+        overview: movie.overview || "Không có tóm tắt."
+      };
+
+      document.getElementById("selected-poster").src = poster;
+      document.getElementById("selected-title").innerText = `${movie.title} (${year})`;
+      document.getElementById("selected-preview").classList.remove("hidden");
+      document.getElementById("search-results").classList.add("hidden");
+    }
+
+    // Lưu đánh giá vào Firestore
+    window.saveReview = async function() {
+      if (!selectedMovie) {
+        alert("Vui lòng tìm và chọn một bộ phim từ danh sách gợi ý trước!");
+        return;
+      }
+      const rating = document.getElementById("rating").value;
+      const reviewText = document.getElementById("review-text").value.trim();
+      const watchedDate = document.getElementById("watched-date").value || new Date().toISOString().split('T')[0];
+
+      const saveBtn = document.getElementById("save-btn");
+      saveBtn.disabled = true;
+      saveBtn.innerText = "Đang lưu...";
+
+      try {
+        await addDoc(moviesCol, {
+          ...selectedMovie,
+          my_rating: Number(rating),
+          review: reviewText,
+          watched_date: watchedDate,
+          created_at: new Date()
+        });
+
+        // Reset ô nhập
+        selectedMovie = null;
+        document.getElementById("search-input").value = "";
+        document.getElementById("review-text").value = "";
+        document.getElementById("selected-preview").classList.add("hidden");
+        loadSavedMovies();
+      } catch (err) {
+        alert("Lỗi lưu phim: " + err.message);
+      } finally {
+        saveBtn.disabled = false;
+        saveBtn.innerText = "Lưu Đánh Giá";
+      }
+    };
+
+    // Tải danh sách phim đã lưu
+    window.loadSavedMovies = async function() {
+      const container = document.getElementById("movies-list");
+      container.innerHTML = `<p class="text-gray-400 col-span-full">Đang tải danh sách phim...</p>`;
+
+      try {
+        const q = query(moviesCol, orderBy("created_at", "desc"));
+        const snapshot = await getDocs(q);
+
+        if (snapshot.empty) {
+          container.innerHTML = `<p class="text-gray-400 col-span-full">Chưa có bộ phim nào được lưu.</p>`;
+          return;
+        }
+
+        container.innerHTML = "";
+        snapshot.forEach(docSnap => {
+          const data = docSnap.data();
+          const card = document.createElement("div");
+          card.className = "bg-slate-800 rounded-xl overflow-hidden border border-slate-700 flex flex-col hover:border-slate-500 transition shadow-lg";
+          card.innerHTML = `
+            <div class="relative h-64 bg-slate-900">
+              <img src="${data.poster_url}" class="w-full h-full object-cover" />
+              <span class="absolute top-2 right-2 bg-yellow-500 text-slate-950 font-bold px-2 py-1 rounded text-xs shadow">
+                ★ ${data.my_rating}/10
+              </span>
+            </div>
+            <div class="p-4 flex-1 flex flex-col justify-between">
+              <div>
+                <h3 class="font-bold text-base text-white line-clamp-1">${data.title}</h3>
+                <p class="text-xs text-slate-400 mb-2">Xem ngày: ${data.watched_date}</p>
+                <p class="text-sm text-gray-300 italic line-clamp-3 mb-3">"${data.review || 'Không có nhận xét'}"</p>
+              </div>
+              <button onclick="removeMovie('${docSnap.id}')" class="text-xs text-red-400 hover:text-red-300 text-left self-end">Xoá</button>
+            </div>
+          `;
+          container.appendChild(card);
+        });
+      } catch (err) {
+        container.innerHTML = `<p class="text-red-400 col-span-full">Lỗi tải dữ liệu: ${err.message}</p>`;
+      }
+    };
+
+    window.removeMovie = async function(id) {
+      if (confirm("Bạn có chắc muốn xoá phim này?")) {
+        await deleteDoc(doc(db, "reviewed_movies", id));
+        loadSavedMovies();
+      }
+    };
+
+    window.addEventListener("DOMContentLoaded", () => {
+      document.getElementById("watched-date").value = new Date().toISOString().split('T')[0];
+      loadSavedMovies();
+    });
+  </script>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen py-10 px-4 md:px-8">
+  <div class="max-w-4xl mx-auto">
+    <!-- Header -->
+    <header class="text-center mb-8">
+      <h1 class="text-3xl font-extrabold tracking-tight text-white mb-2">🎬 Movie Journal</h1>
+      <p class="text-slate-400 text-sm">Ghi chép và chấm điểm những bộ phim đã xem</p>
+    </header>
+
+    <!-- Form Thêm Phim -->
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 mb-10 shadow-xl">
+      <h2 class="text-lg font-bold mb-4 text-white">Thêm Đánh Giá Mới</h2>
+      
+      <!-- Tìm TMDB -->
+      <div class="relative mb-4">
+        <div class="flex gap-2">
+          <input id="search-input" type="text" placeholder="Nhập tên phim để tìm (ví dụ: Oppenheimer, Interstellar)..." 
+            class="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+            onkeydown="if(event.key === 'Enter') searchMovies()" />
+          <button onclick="searchMovies()" class="bg-blue-600 hover:bg-blue-500 px-5 py-2.5 rounded-lg font-medium text-white transition text-sm">Tìm kiếm</button>
+        </div>
+        <div id="search-results" class="hidden absolute left-0 right-0 top-12 mt-1 bg-slate-800 border border-slate-700 rounded-lg p-2 z-20 space-y-1 shadow-2xl max-h-80 overflow-y-auto"></div>
+      </div>
+
+      <!-- Preview -->
+      <div id="selected-preview" class="hidden bg-slate-800/80 p-3 rounded-xl mb-4 border border-slate-700 flex gap-4 items-center">
+        <img id="selected-poster" class="w-14 h-20 object-cover rounded shadow" src="" />
+        <div>
+          <h3 id="selected-title" class="font-bold text-white text-base"></h3>
+          <p class="text-xs text-emerald-400 mt-1">✓ Đã liên kết thông tin & poster phim</p>
+        </div>
+      </div>
+
+      <!-- Input điểm và ngày -->
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+        <div>
+          <label class="block text-xs font-semibold uppercase text-slate-400 mb-1">Điểm đánh giá (1 - 10)</label>
+          <input id="rating" type="number" min="1" max="10" step="0.5" value="8" 
+            class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm" />
+        </div>
+        <div>
+          <label class="block text-xs font-semibold uppercase text-slate-400 mb-1">Ngày xem</label>
+          <input id="watched-date" type="date" 
+            class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm" />
+        </div>
+      </div>
+
+      <!-- Nhận xét -->
+      <div class="mb-4">
+        <label class="block text-xs font-semibold uppercase text-slate-400 mb-1">Nhận xét / Review</label>
+        <textarea id="review-text" rows="3" placeholder="Phim có gì đáng nhớ, cảm nghĩ sau khi xem..." 
+          class="w-full bg-slate-800 border border-slate-700 rounded-lg p-3 text-white focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"></textarea>
+      </div>
+
+      <button id="save-btn" onclick="saveReview()" class="w-full bg-emerald-600 hover:bg-emerald-500 py-2.5 rounded-lg font-semibold text-white transition shadow-md">
+        Lưu Đánh Giá
+      </button>
+    </div>
+
+    <!-- Danh sách phim -->
+    <div>
+      <h2 class="text-xl font-bold mb-4 text-white border-b border-slate-800 pb-2">Danh Sách Phim Đã Xem</h2>
+      <div id="movies-list" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
+        <!-- Danh sách card sẽ xuất hiện ở đây -->
+      </div>
+    </div>
+  </div>
+</body>
+</html>
